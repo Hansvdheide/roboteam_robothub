@@ -3,60 +3,78 @@
 #include "roboteam_msgs/RobotCommand.h"
 #include "std_msgs/Float64MultiArray.h"
 
+#include <boost/optional.hpp>
+#include <array>
 #include <iostream>
 #include <string>
 #include <QtNetwork>
 #include <ros/ros.h>
-
+#include <time.h>
 #include <vector>
 #include <math.h>
 
 #define PI 3.14159265
 
-ros::Publisher pub;
+// TODO: Use ros param to flush threshold
+// TODO: Use getCached() instead of get() with params
 
-void sendGRsimCommands(const roboteam_msgs::RobotCommand::ConstPtr &_msg)
-{
-    // ROS_INFO_STREAM("received message for GRsim");
+ros::Publisher pub;
+time_t begin = time(NULL);
+int count = 0;
+
+const int MAX_ROBOTS = 6;
+std::array<boost::optional<roboteam_msgs::RobotCommand>, MAX_ROBOTS> blueCommands;
+std::array<boost::optional<roboteam_msgs::RobotCommand>, MAX_ROBOTS> yellowCommands;
+size_t blueCounter = 0;
+size_t yellowCounter = 0;
+
+void flushCommands(const std::array<boost::optional<roboteam_msgs::RobotCommand>, MAX_ROBOTS> &commands, bool yellowTeam) {
     grSim_Packet packet;
 
-    std::string color;
-    ros::param::get("our_color", color);
-
-    packet.mutable_commands()->set_isteamyellow(color == "yellow");
+    packet.mutable_commands()->set_isteamyellow(yellowTeam);
     packet.mutable_commands()->set_timestamp(0.0);
 
+    int ctr = 0;
+
     // Initialize a grSim command (grSim is the robocup SSL simulator created by Parsians)
-    grSim_Robot_Command* command = packet.mutable_commands()->add_robot_commands();
-    command->set_id(_msg->id);
+    for (int i = 0; i < MAX_ROBOTS; ++i) {
+        if (!commands[i]) continue; // If none, skip the id
 
-    // Fill the grSim command with the received values. Set either wheelspeed or robotspeed
-    command->set_wheelsspeed(false);
-    // command->set_wheel1(0.0);
-    // command->set_wheel2(0.0);
-    // command->set_wheel3(0.0);
-    // command->set_wheel4(0.0);
-    command->set_veltangent(_msg->x_vel);
-    command->set_velnormal(_msg->y_vel);
-    command->set_velangular(_msg->w);
+        const auto &robotCommand = *commands[i];
 
-	if(_msg->kicker){
-    	command->set_kickspeedx(_msg->kicker_vel);
+        grSim_Robot_Command* command = packet.mutable_commands()->add_robot_commands();
+        command->set_id(i);
+
+        // Fill the grSim command with the received values. Set either wheelspeed or robotspeed
+        command->set_wheelsspeed(false);
+        command->set_wheel1(0.0);
+        command->set_wheel2(0.0);
+        command->set_wheel3(0.0);
+        command->set_wheel4(0.0);
+        command->set_veltangent(robotCommand.x_vel);
+        command->set_velnormal(robotCommand.y_vel);
+        command->set_velangular(robotCommand.w);
+
+        if(robotCommand.kicker){
+            command->set_kickspeedx(robotCommand.kicker_vel);
+        }
+        else {
+            command->set_kickspeedx(0);
+        }
+        if(robotCommand.chipper){
+
+            command->set_kickspeedz(robotCommand.chipper_vel);
+        }
+        else {
+            command->set_kickspeedz(0);
+        }
+
+        command->set_spinner(robotCommand.dribbler);
+
+        ctr++;
     }
-    else {
-    	command->set_kickspeedx(0);
-    }
-    if(_msg->chipper){
 
-    	command->set_kickspeedz(_msg->chipper_vel);
-    }
-    else {
-    	command->set_kickspeedz(0);
-    }
-
-    command->set_spinner(_msg->dribbler);
-
-	QByteArray dgram;
+    QByteArray dgram;
     dgram.resize(packet.ByteSize());
     packet.SerializeToArray(dgram.data(), dgram.size());
 
@@ -68,6 +86,106 @@ void sendGRsimCommands(const roboteam_msgs::RobotCommand::ConstPtr &_msg)
     ros::param::get("grsim/ip", grsim_ip);
     ros::param::get("grsim/port", grsim_port);
     udpsocket.writeDatagram(dgram, QHostAddress(QString::fromStdString(grsim_ip)), grsim_port);
+    
+    // char character = yellowTeam ? '+' : '-';
+    // for (int i = 0; i < ctr; ++i) {
+        // std::cout << character;
+    // }
+    // std::cout << "\n";
+    
+    // std::cout << ++count << "\n";
+}
+
+void sendGRsimCommands(const roboteam_msgs::RobotCommand::ConstPtr &_msg)
+{
+    if (_msg->id > MAX_ROBOTS) {
+        ROS_ERROR("Received robot command for id > 5. Dropping packet.");
+        return;
+    }
+
+    std::string our_color;
+    ros::param::get("our_color", our_color);
+    if (our_color == "yellow") {
+        yellowCommands[_msg->id] = *_msg;
+        yellowCounter++;
+
+        if (yellowCounter >= MAX_ROBOTS) {
+            flushCommands(yellowCommands, true);
+            yellowCommands.fill(boost::none);
+            yellowCounter = 0;
+        }
+    } else {
+        blueCommands[_msg->id] = *_msg;
+        blueCounter++;
+
+        if (blueCounter >= MAX_ROBOTS) {
+            flushCommands(blueCommands, false);
+            blueCommands.fill(boost::none);
+            blueCounter = 0;
+        }
+    }
+
+    // ROS_INFO_STREAM("received message for GRsim");
+    // grSim_Packet packet;
+
+    // std::string color;
+    // ros::param::get("our_color", color);
+
+    // packet.mutable_commands()->set_isteamyellow(color == "yellow");
+    // packet.mutable_commands()->set_timestamp(0.0);
+
+    // Initialize a grSim command (grSim is the robocup SSL simulator created by Parsians)
+    // grSim_Robot_Command* command = packet.mutable_commands()->add_robot_commands();
+    // command->set_id(_msg->id);
+
+    // Fill the grSim command with the received values. Set either wheelspeed or robotspeed
+    // command->set_wheelsspeed(false);
+    // command->set_wheel1(0.0);
+    // command->set_wheel2(0.0);
+    // command->set_wheel3(0.0);
+    // command->set_wheel4(0.0);
+    // command->set_veltangent(_msg->x_vel);
+    // command->set_velnormal(_msg->y_vel);
+    // command->set_velangular(_msg->w);
+
+    // if(_msg->kicker){
+        // command->set_kickspeedx(_msg->kicker_vel);
+    // }
+    // else {
+        // command->set_kickspeedx(0);
+    // }
+    // if(_msg->chipper){
+
+        // command->set_kickspeedz(_msg->chipper_vel);
+    // }
+    // else {
+        // command->set_kickspeedz(0);
+    // }
+
+    // command->set_spinner(_msg->dribbler);
+
+    // QByteArray dgram;
+    // dgram.resize(packet.ByteSize());
+    // packet.SerializeToArray(dgram.data(), dgram.size());
+
+    // QUdpSocket udpsocket;
+
+    // Send to IP address and port specified in grSim
+    // std::string grsim_ip = "127.0.0.1";
+    // int grsim_port = 20011;
+    // ros::param::get("grsim/ip", grsim_ip);
+    // ros::param::get("grsim/port", grsim_port);
+    // if (rand() % 20 == 0) {
+        // udpsocket.writeDatagram(dgram, QHostAddress(QString::fromStdString(grsim_ip)), grsim_port);
+        // std::cout << "|";
+        // count++;
+    // }
+
+    // if (time(NULL) != begin) {
+        // std::cout << "Commands sent: " << std::to_string(count) << "\n";
+        // count = 0;
+        // begin = time(NULL);
+    // }
 }
 
 void sendGazeboCommands(const roboteam_msgs::RobotCommand::ConstPtr &_msg)
@@ -114,10 +232,17 @@ void processRobotCommand(const roboteam_msgs::RobotCommand::ConstPtr &msg) {
     } else { // Default to grsim
         sendGRsimCommands(msg);
     }
+
 }
 
 int main(int argc, char *argv[]) {
     // Create ROS node called robothub and subscribe to topic 'robotcommands'
+    srand(time(NULL));
+    blueCommands.fill(boost::none);
+    yellowCommands.fill(boost::none);
+
+    // TODO: Try setting rolenode at 60fps
+
     ros::init(argc, argv, "robothub");
     ros::NodeHandle n;
     ros::Rate loop_rate(60);
