@@ -122,7 +122,7 @@ namespace {
 
 // http://www.boost.org/doc/libs/1_40_0/doc/html/boost_asio/overview/serial_ports.html
 
-std::string const SERIAL_FILE_PATH = "/dev/pts/22";
+std::string const SERIAL_FILE_PATH = "/dev/ttyACM0";
 bool serialPortOpen = false;
 boost::asio::io_service io;
 boost::asio::serial_port serialPort(io);
@@ -134,9 +134,11 @@ void sendSerialCommands(const roboteam_msgs::RobotCommand::ConstPtr &_msg) {
         // Open serial port
         boost::system::error_code errorCode;
         serialPort.open(SERIAL_FILE_PATH, errorCode);
+        std::cout << errorCode.message() << std::endl;
         switch (errorCode.value()) {
             case boost::system::errc::success:
                 serialPortOpen = true;
+                std::cout << "opened serial port" << std::endl;
                 break;
             default:
                 std::cerr << "[RobotHub] ERROR! Could not open serial port!\n";
@@ -150,22 +152,36 @@ void sendSerialCommands(const roboteam_msgs::RobotCommand::ConstPtr &_msg) {
         // Write message to it
         auto bytes = *bytesOpt;
         serialPort.write_some(boost::asio::buffer(bytes.data(), bytes.size()));
+        serialPort.write_some(boost::asio::buffer(bytes.data(), 1));
         
+
         std::cout << "Expected message: \n";
 
         for (const auto& byte : bytes) {
             std::cout << "\t" << rtt::byteToBinary(byte) << "\t" << std::to_string(byte) << "\n";
         }
-        
+
+        std::cout << "uncomment some code here to wait for ack " << std::endl;
+        /* UNCOMMENT if you want to wait for ack
+
+
         std::cout << "Waiting for ack...";
 
         // Listen for ack
-        int readBytes = 0;
-        do {
-            readBytes = serialPort.read_some(boost::asio::buffer(bytes.data(), 1));
-        } while (readBytes == 0);
+        int const numBytes = 3;
+        uint8_t ackCode[numBytes];
+        int receivedBytes = serialPort.read_some(boost::asio::buffer(ackCode, numBytes - 1));
 
-        std::cout << " Got: " << std::to_string(bytes[0]) << "\n";
+        bytes[numBytes] = 0;
+
+        std::cout << "Received bytes: " << receivedBytes << "\n";
+
+        // std::cout << "The byte: " << std::to_string(ackCode[0]) << "\n";
+        // std::cout << "The byte: " << std::to_string(ackCode[1]) << "\n";
+
+        std::string returnMessage((char*) &ackCode[0]);
+        std::cout << "The message: " << returnMessage << "\n";
+*/
         
         // TODO: @Performance this should probably done in such a way that it doesn't
         // block ros::spin()
@@ -184,7 +200,7 @@ void processRobotCommand(const roboteam_msgs::RobotCommand::ConstPtr &msg) {
 
     // TODO: @Safety I would like to use getcached here, but I would also like to
     // have the safety of utils' constants.
-
+    std::cout << ".";
     bool normaliseField =  false;
     ros::param::getCached("normalize_field", normaliseField);
 
